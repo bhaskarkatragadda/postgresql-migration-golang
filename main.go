@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -12,9 +13,8 @@ import (
 
 // Configuration defines the parameters for the migration process.
 type Configuration struct {
-	DBUsername    string
-	MigrationDir  string
-	DBConnections []string
+	DBUsername   string
+	MigrationDir string
 }
 
 // MigrationResult holds information about the result of a migration.
@@ -27,24 +27,57 @@ type MigrationResult struct {
 func main() {
 	// Define configuration
 	config := Configuration{
-		DBUsername:    "username",
-		MigrationDir:  "src/migration",
-		DBConnections: []string{"db1", "db2", "db3"},
+		DBUsername:   "username",
+		MigrationDir: "src/migration",
+	}
+
+	// Fetch list of databases
+	databases, err := fetchDatabases(config.DBUsername)
+	if err != nil {
+		log.Fatal("Failed to fetch databases:", err)
 	}
 
 	// Perform migrations
-	results := migrateDatabases(config)
+	results := migrateDatabases(config, databases)
 
 	// Print results
 	printMigrationResults(results)
 }
 
-// migrateDatabases performs schema migrations for multiple databases.
-func migrateDatabases(config Configuration) []MigrationResult {
-	var wg sync.WaitGroup
-	resultsCh := make(chan MigrationResult, len(config.DBConnections))
+// fetchDatabases fetches the list of databases from PostgreSQL.
+func fetchDatabases(username string) ([]string, error) {
+	connectionString := fmt.Sprintf("user=%s sslmode=disable", username)
+	db, err := sql.Open("postgres", connectionString)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
 
-	for _, dbName := range config.DBConnections {
+	rows, err := db.Query("SELECT datname FROM pg_database WHERE datistemplate = false")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var databases []string
+	for rows.Next() {
+		var dbName string
+		err := rows.Scan(&dbName)
+		if err != nil {
+			return nil, err
+		}
+		databases = append(databases, dbName)
+	}
+
+	return databases, nil
+}
+
+// migrateDatabases performs schema migrations for multiple databases.
+func migrateDatabases(config Configuration, databases []string) []MigrationResult {
+	var wg sync.WaitGroup
+	resultsCh := make(chan MigrationResult, len(databases))
+
+	for _, dbName := range databases {
 		wg.Add(1)
 		go func(dbName string) {
 			defer wg.Done()
